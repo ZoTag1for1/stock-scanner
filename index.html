@@ -41,19 +41,43 @@
     const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyGJyq76Efd3OC_o5gL6fAKUcbWzTzb4N9zpjPubt8YpTvWwq9J5H-5Luep08PAMxtxaA/exec';
     let mode = 'in';
 
-    // จำกัดให้อ่านเฉพาะบาร์โค้ดชนิดที่ใช้จริง (ไม่เสียเวลาลองอ่าน QR/PDF417/DataMatrix ฯลฯ) → เร็วขึ้นมาก
-    const barcodeReader = new Html5Qrcode('qr-reader-hidden', {
-      formatsToSupport: [
-        Html5QrcodeSupportedFormats.EAN_13,
-        Html5QrcodeSupportedFormats.EAN_8,
-        Html5QrcodeSupportedFormats.UPC_A,
-        Html5QrcodeSupportedFormats.UPC_E,
-        Html5QrcodeSupportedFormats.CODE_128,
-        Html5QrcodeSupportedFormats.CODE_39,
-        Html5QrcodeSupportedFormats.QR_CODE
-      ],
-      verbose: false
+    // แสดง error จริงบนหน้าจอทุกครั้งที่โค้ดพัง แทนที่จะเงียบหรือขึ้นแค่ "นานเกินไป"
+    window.addEventListener('error', function (e) {
+      const box = document.getElementById('result');
+      if (box) box.innerText = '⚠️ โค้ดพัง: ' + e.message;
     });
+    window.addEventListener('unhandledrejection', function (e) {
+      const box = document.getElementById('result');
+      if (box) box.innerText = '⚠️ เกิดข้อผิดพลาด: ' + (e.reason && e.reason.message ? e.reason.message : e.reason);
+    });
+
+    // จำกัดให้อ่านเฉพาะบาร์โค้ดชนิดที่ใช้จริง (เร็วกว่า) — ถ้าสร้างไม่สำเร็จจะสลับไปใช้โหมดสำรองอัตโนมัติ
+    let barcodeReader = null;
+    try {
+      barcodeReader = new Html5Qrcode('qr-reader-hidden', {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.QR_CODE
+        ],
+        verbose: false
+      });
+    } catch (e) {
+      console.error('สร้างตัวอ่านแบบเร็วไม่สำเร็จ จะใช้โหมดสำรอง:', e);
+      barcodeReader = null;
+    }
+
+    // เลือกวิธีอ่านบาร์โค้ดที่ใช้ได้จริง: แบบเร็ว (ถ้าสร้างสำเร็จ) หรือแบบสำรอง (แน่นอนกว่า แต่ช้ากว่า)
+    function scanBarcodeFromFile(file) {
+      if (barcodeReader && typeof barcodeReader.scanFileV2 === 'function') {
+        return barcodeReader.scanFileV2(file, false).then(result => result.decodedText);
+      }
+      return Html5Qrcode.scanFile(file, false);
+    }
 
     function setMode(m) {
       mode = m;
@@ -151,11 +175,10 @@
 
       canvas.toBlob(blob => {
         const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
-        barcodeReader.scanFileV2(file, false)
-          .then(result => {
+        scanBarcodeFromFile(file)
+          .then(decodedText => {
             if (timedOut) return; // ผลมาช้าเกินไป ผู้ใช้กดถ่ายใหม่ไปแล้ว
             clearTimeout(timeoutId);
-            const decodedText = result.decodedText;
             const qty = prompt('พบบาร์โค้ด: ' + decodedText + '\nใส่จำนวน:', '1');
             if (!qty) {
               retake(); // ยกเลิก กลับไปกล้องสดเพื่อถ่ายใหม่
