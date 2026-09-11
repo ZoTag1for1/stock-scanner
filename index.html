@@ -24,11 +24,13 @@
   </p>
   <p>โหมดปัจจุบัน: <span id="modeLabel">รับเข้า</span></p>
 
-  <!-- กดปุ่มนี้เพื่อเปิดกล้องถ่ายรูปบาร์โค้ดของมือถือ -->
-  <input type="file" accept="image/*" capture="environment" id="fileInput" style="display:none" onchange="handleFile(event)">
-  <button class="capture" onclick="document.getElementById('fileInput').click()">📷 ถ่ายรูปเพื่อสแกน</button>
+  <button class="capture" id="openCameraBtn" onclick="openCamera()">📷 เปิดกล้องสแกน</button>
+  <button class="capture" id="captureBtn" onclick="captureAndScan()" style="display:none; background:#28a745;">📸 ถ่ายเพื่ออ่านบาร์โค้ด</button>
+  <button id="closeCameraBtn" onclick="closeCamera()" style="display:none; background:#6c757d; color:white;">✖ ปิดกล้อง</button>
 
-  <img id="preview">
+  <video id="video" autoplay playsinline style="width:100%; margin-top:10px; border-radius:8px; display:none;"></video>
+  <canvas id="canvas" style="display:none;"></canvas>
+
   <div id="result">ผลลัพธ์จะแสดงตรงนี้</div>
 
   <script>
@@ -40,26 +42,92 @@
       document.getElementById('modeLabel').innerText = m === 'in' ? 'รับเข้า' : 'จำหน่ายออก';
     }
 
-    function handleFile(event) {
-      const file = event.target.files[0];
-      if (!file) return;
+    let currentStream = null;
 
-      const preview = document.getElementById('preview');
-      preview.src = URL.createObjectURL(file);
-      preview.style.display = 'block';
-
+    function openCamera() {
       const box = document.getElementById('result');
+      box.innerText = '🎥 กำลังเปิดกล้อง...';
+
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } }
+      })
+      .then(stream => {
+        currentStream = stream;
+        const video = document.getElementById('video');
+        video.srcObject = stream;
+        video.style.display = 'block';
+
+        document.getElementById('openCameraBtn').style.display = 'none';
+        document.getElementById('captureBtn').style.display = 'block';
+        document.getElementById('closeCameraBtn').style.display = 'block';
+        box.innerText = '📍 เล็งกล้องไปที่บาร์โค้ด แล้วกด "ถ่ายเพื่ออ่านบาร์โค้ด"';
+      })
+      .catch(err => {
+        console.error('เปิดกล้องไม่สำเร็จ:', err);
+        box.innerText = '❌ เปิดกล้องไม่สำเร็จ: ' + err.message + ' (ตรวจสอบว่าอนุญาตสิทธิ์กล้องแล้ว และเว็บต้องเป็น https)';
+      });
+    }
+
+    function closeCamera() {
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+        currentStream = null;
+      }
+      document.getElementById('video').style.display = 'none';
+      document.getElementById('openCameraBtn').style.display = 'block';
+      document.getElementById('captureBtn').style.display = 'none';
+      document.getElementById('closeCameraBtn').style.display = 'none';
+      document.getElementById('result').innerText = 'ผลลัพธ์จะแสดงตรงนี้';
+    }
+
+    function captureAndScan() {
+      const box = document.getElementById('result');
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+
+      // ย่อขนาดภาพก่อนสแกน (ตัวใหญ่สุด 900px) เพื่อให้อ่านบาร์โค้ดเร็วขึ้นมาก
+      const MAX_DIM = 900;
+      let w = video.videoWidth;
+      let h = video.videoHeight;
+      if (w > h && w > MAX_DIM) {
+        h = Math.round(h * (MAX_DIM / w));
+        w = MAX_DIM;
+      } else if (h > MAX_DIM) {
+        w = Math.round(w * (MAX_DIM / h));
+        h = MAX_DIM;
+      }
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+
       box.innerText = '🔍 กำลังอ่านบาร์โค้ด...';
 
-      Html5Qrcode.scanFile(file, false)
-        .then(decodedText => {
-          const qty = prompt('พบบาร์โค้ด: ' + decodedText + '\nใส่จำนวน:', '1');
-          if (!qty) return;
-          sendToServer(decodedText, qty);
-        })
-        .catch(err => {
-          box.innerText = '❌ อ่านบาร์โค้ดไม่ได้ ลองถ่ายใหม่ให้ชัดและใกล้ขึ้น';
-        });
+      // กันเหนียว: ถ้าสแกนนานเกิน 6 วินาทีให้แจ้งเตือนแทนที่จะค้างเฉยๆ
+      let timedOut = false;
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        box.innerText = '⏱️ อ่านบาร์โค้ดนานเกินไป ลองขยับเข้าใกล้/เล็งให้ตรงแล้วถ่ายใหม่';
+      }, 6000);
+
+      canvas.toBlob(blob => {
+        const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
+        Html5Qrcode.scanFile(file, false)
+          .then(decodedText => {
+            if (timedOut) return; // ผลมาช้าเกินไป ผู้ใช้กดถ่ายใหม่ไปแล้ว
+            clearTimeout(timeoutId);
+            const qty = prompt('พบบาร์โค้ด: ' + decodedText + '\nใส่จำนวน:', '1');
+            if (!qty) {
+              box.innerText = '📍 เล็งกล้องไปที่บาร์โค้ด แล้วกด "ถ่ายเพื่ออ่านบาร์โค้ด"';
+              return;
+            }
+            sendToServer(decodedText, qty);
+          })
+          .catch(err => {
+            if (timedOut) return;
+            clearTimeout(timeoutId);
+            box.innerText = '❌ อ่านบาร์โค้ดไม่ได้ ลองเล็งให้ชัดขึ้น ใกล้ขึ้น หรือหลบแสงสะท้อน แล้วถ่ายใหม่';
+          });
+      }, 'image/jpeg', 0.85);
     }
 
     function sendToServer(barcode, qty) {
