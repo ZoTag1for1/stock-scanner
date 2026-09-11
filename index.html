@@ -26,9 +26,11 @@
 
   <button class="capture" id="openCameraBtn" onclick="openCamera()">📷 เปิดกล้องสแกน</button>
   <button class="capture" id="captureBtn" onclick="captureAndScan()" style="display:none; background:#28a745;">📸 ถ่ายเพื่ออ่านบาร์โค้ด</button>
+  <button id="retakeBtn" onclick="retake()" style="display:none; background:#ffc107;">🔄 ถ่ายใหม่ (ไม่ชัด)</button>
   <button id="closeCameraBtn" onclick="closeCamera()" style="display:none; background:#6c757d; color:white;">✖ ปิดกล้อง</button>
 
   <video id="video" autoplay playsinline style="width:100%; margin-top:10px; border-radius:8px; display:none;"></video>
+  <img id="capturedPhoto" style="width:100%; margin-top:10px; border-radius:8px; display:none;">
   <canvas id="canvas" style="display:none;"></canvas>
 
   <div id="result">ผลลัพธ์จะแสดงตรงนี้</div>
@@ -49,7 +51,11 @@
       box.innerText = '🎥 กำลังเปิดกล้อง...';
 
       navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } }
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        }
       })
       .then(stream => {
         currentStream = stream;
@@ -74,10 +80,20 @@
         currentStream = null;
       }
       document.getElementById('video').style.display = 'none';
+      document.getElementById('capturedPhoto').style.display = 'none';
       document.getElementById('openCameraBtn').style.display = 'block';
       document.getElementById('captureBtn').style.display = 'none';
+      document.getElementById('retakeBtn').style.display = 'none';
       document.getElementById('closeCameraBtn').style.display = 'none';
       document.getElementById('result').innerText = 'ผลลัพธ์จะแสดงตรงนี้';
+    }
+
+    function retake() {
+      document.getElementById('capturedPhoto').style.display = 'none';
+      document.getElementById('video').style.display = 'block';
+      document.getElementById('captureBtn').style.display = 'block';
+      document.getElementById('retakeBtn').style.display = 'none';
+      document.getElementById('result').innerText = '📍 เล็งกล้องไปที่บาร์โค้ด แล้วกด "ถ่ายเพื่ออ่านบาร์โค้ด"';
     }
 
     function captureAndScan() {
@@ -85,8 +101,8 @@
       const video = document.getElementById('video');
       const canvas = document.getElementById('canvas');
 
-      // ย่อขนาดภาพก่อนสแกน (ตัวใหญ่สุด 900px) เพื่อให้อ่านบาร์โค้ดเร็วขึ้นมาก
-      const MAX_DIM = 900;
+      // ย่อขนาดภาพก่อนสแกน (ตัวใหญ่สุด 1280px) — สมดุลระหว่างความคมของบาร์โค้ดกับความเร็วในการอ่าน
+      const MAX_DIM = 1280;
       let w = video.videoWidth;
       let h = video.videoHeight;
       if (w > h && w > MAX_DIM) {
@@ -99,6 +115,14 @@
       canvas.width = w;
       canvas.height = h;
       canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+
+      // แช่ภาพที่ถ่ายไว้เป็นรูปนิ่ง แทนที่จะให้วิดีโอสดวิ่งต่อ
+      const capturedPhoto = document.getElementById('capturedPhoto');
+      capturedPhoto.src = canvas.toDataURL('image/jpeg', 0.9);
+      capturedPhoto.style.display = 'block';
+      video.style.display = 'none';
+      document.getElementById('captureBtn').style.display = 'none';
+      document.getElementById('retakeBtn').style.display = 'block';
 
       box.innerText = '🔍 กำลังอ่านบาร์โค้ด...';
 
@@ -117,15 +141,17 @@
             clearTimeout(timeoutId);
             const qty = prompt('พบบาร์โค้ด: ' + decodedText + '\nใส่จำนวน:', '1');
             if (!qty) {
-              box.innerText = '📍 เล็งกล้องไปที่บาร์โค้ด แล้วกด "ถ่ายเพื่ออ่านบาร์โค้ด"';
+              retake(); // ยกเลิก กลับไปกล้องสดเพื่อถ่ายใหม่
               return;
             }
             sendToServer(decodedText, qty);
+            retake(); // อ่านสำเร็จแล้ว กลับไปกล้องสดพร้อมสแกนชิ้นถัดไปทันที
           })
           .catch(err => {
             if (timedOut) return;
             clearTimeout(timeoutId);
-            box.innerText = '❌ อ่านบาร์โค้ดไม่ได้ ลองเล็งให้ชัดขึ้น ใกล้ขึ้น หรือหลบแสงสะท้อน แล้วถ่ายใหม่';
+            // อ่านไม่ได้ - เก็บภาพที่ถ่ายไว้ให้ดู แล้วให้กด "ถ่ายใหม่" เอง
+            box.innerText = '❌ อ่านบาร์โค้ดไม่ได้จากภาพนี้ ลองเล็งให้ชัดขึ้น ใกล้ขึ้น หรือหลบแสงสะท้อน แล้วกด "ถ่ายใหม่"';
           });
       }, 'image/jpeg', 0.85);
     }
