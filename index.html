@@ -33,11 +33,27 @@
   <img id="capturedPhoto" style="width:100%; margin-top:10px; border-radius:8px; display:none;">
   <canvas id="canvas" style="display:none;"></canvas>
 
+  <div id="qr-reader-hidden" style="display:none"></div>
+
   <div id="result">ผลลัพธ์จะแสดงตรงนี้</div>
 
   <script>
     const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyGJyq76Efd3OC_o5gL6fAKUcbWzTzb4N9zpjPubt8YpTvWwq9J5H-5Luep08PAMxtxaA/exec';
     let mode = 'in';
+
+    // จำกัดให้อ่านเฉพาะบาร์โค้ดชนิดที่ใช้จริง (ไม่เสียเวลาลองอ่าน QR/PDF417/DataMatrix ฯลฯ) → เร็วขึ้นมาก
+    const barcodeReader = new Html5Qrcode('qr-reader-hidden', {
+      formatsToSupport: [
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.QR_CODE
+      ],
+      verbose: false
+    });
 
     function setMode(m) {
       mode = m;
@@ -126,19 +142,20 @@
 
       box.innerText = '🔍 กำลังอ่านบาร์โค้ด...';
 
-      // กันเหนียว: ถ้าสแกนนานเกิน 6 วินาทีให้แจ้งเตือนแทนที่จะค้างเฉยๆ
+      // กันเหนียว: ถ้าสแกนนานเกิน 12 วินาทีให้แจ้งเตือนแทนที่จะค้างเฉยๆ
       let timedOut = false;
       const timeoutId = setTimeout(() => {
         timedOut = true;
         box.innerText = '⏱️ อ่านบาร์โค้ดนานเกินไป ลองขยับเข้าใกล้/เล็งให้ตรงแล้วถ่ายใหม่';
-      }, 6000);
+      }, 12000);
 
       canvas.toBlob(blob => {
         const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
-        Html5Qrcode.scanFile(file, false)
-          .then(decodedText => {
+        barcodeReader.scanFileV2(file, false)
+          .then(result => {
             if (timedOut) return; // ผลมาช้าเกินไป ผู้ใช้กดถ่ายใหม่ไปแล้ว
             clearTimeout(timeoutId);
+            const decodedText = result.decodedText;
             const qty = prompt('พบบาร์โค้ด: ' + decodedText + '\nใส่จำนวน:', '1');
             if (!qty) {
               retake(); // ยกเลิก กลับไปกล้องสดเพื่อถ่ายใหม่
