@@ -11,8 +11,8 @@
   .in { background: #d4edda; }
   .out { background: #f8d7da; }
   .capture { background: #007bff; color: white; font-weight: bold; }
-  #preview { width: 100%; margin-top: 10px; border-radius: 8px; display: none; }
-  #result { margin-top: 16px; padding: 12px; border-radius: 6px; background: #eee; }
+  #reader { width: 100%; margin-top: 10px; }
+  #result { margin-top: 16px; padding: 12px; border-radius: 6px; background: #eee; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -25,15 +25,9 @@
   <p>โหมดปัจจุบัน: <span id="modeLabel">รับเข้า</span></p>
 
   <button class="capture" id="openCameraBtn" onclick="openCamera()">📷 เปิดกล้องสแกน</button>
-  <button class="capture" id="captureBtn" onclick="captureAndScan()" style="display:none; background:#28a745;">📸 ถ่ายเพื่ออ่านบาร์โค้ด</button>
-  <button id="retakeBtn" onclick="retake()" style="display:none; background:#ffc107;">🔄 ถ่ายใหม่ (ไม่ชัด)</button>
   <button id="closeCameraBtn" onclick="closeCamera()" style="display:none; background:#6c757d; color:white;">✖ ปิดกล้อง</button>
 
-  <video id="video" autoplay playsinline style="width:100%; margin-top:10px; border-radius:8px; display:none;"></video>
-  <img id="capturedPhoto" style="width:100%; margin-top:10px; border-radius:8px; display:none;">
-  <canvas id="canvas" style="display:none;"></canvas>
-
-  <div id="qr-reader-hidden" style="display:none"></div>
+  <div id="reader"></div>
 
   <div id="result">ผลลัพธ์จะแสดงตรงนี้</div>
 
@@ -41,7 +35,7 @@
     const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyGJyq76Efd3OC_o5gL6fAKUcbWzTzb4N9zpjPubt8YpTvWwq9J5H-5Luep08PAMxtxaA/exec';
     let mode = 'in';
 
-    // แสดง error จริงบนหน้าจอทุกครั้งที่โค้ดพัง แทนที่จะเงียบหรือขึ้นแค่ "นานเกินไป"
+    // แสดง error จริงบนหน้าจอทุกครั้งที่โค้ดพัง จะได้เห็นสาเหตุจริงเสมอ
     window.addEventListener('error', function (e) {
       const box = document.getElementById('result');
       if (box) box.innerText = '⚠️ โค้ดพัง: ' + e.message;
@@ -51,165 +45,84 @@
       if (box) box.innerText = '⚠️ เกิดข้อผิดพลาด: ' + (e.reason && e.reason.message ? e.reason.message : e.reason);
     });
 
-    // จำกัดให้อ่านเฉพาะบาร์โค้ดชนิดที่ใช้จริง (เร็วกว่า) — ถ้าสร้างไม่สำเร็จจะสลับไปใช้โหมดสำรองอัตโนมัติ
-    let barcodeReader = null;
-    try {
-      barcodeReader = new Html5Qrcode('qr-reader-hidden', {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.EAN_8,
-          Html5QrcodeSupportedFormats.UPC_A,
-          Html5QrcodeSupportedFormats.UPC_E,
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.QR_CODE
-        ],
-        verbose: false
-      });
-    } catch (e) {
-      console.error('สร้างตัวอ่านแบบเร็วไม่สำเร็จ จะใช้โหมดสำรอง:', e);
-      barcodeReader = null;
-    }
-
-    // เลือกวิธีอ่านบาร์โค้ดที่ใช้ได้จริง: แบบเร็ว (ถ้าสร้างสำเร็จ) หรือแบบสำรอง (แน่นอนกว่า แต่ช้ากว่า)
-    function scanBarcodeFromFile(file) {
-      if (barcodeReader && typeof barcodeReader.scanFileV2 === 'function') {
-        return barcodeReader.scanFileV2(file, false).then(result => result.decodedText);
-      }
-      return Html5Qrcode.scanFile(file, false);
-    }
-
     function setMode(m) {
       mode = m;
       document.getElementById('modeLabel').innerText = m === 'in' ? 'รับเข้า' : 'จำหน่ายออก';
     }
 
-    let currentStream = null;
+    let html5QrCode = null;
+    let isProcessing = false; // กันไม่ให้เด้ง prompt ซ้ำตอนเจอบาร์โค้ดเดิมซ้ำๆ ในเฟรมถัดไป
 
     function openCamera() {
       const box = document.getElementById('result');
       box.innerText = '🎥 กำลังเปิดกล้อง...';
 
-      navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        }
-      })
-      .then(stream => {
-        currentStream = stream;
-        const video = document.getElementById('video');
-        video.srcObject = stream;
-        video.style.display = 'block';
+      html5QrCode = new Html5Qrcode('reader');
 
+      html5QrCode.start(
+        { facingMode: 'environment' },
+        {
+          fps: 10,
+          qrbox: { width: 280, height: 160 }
+        },
+        (decodedText) => {
+          if (isProcessing) return; // เจอซ้ำระหว่างรอ prompt เดิม ไม่ต้องทำอะไรอีก
+          isProcessing = true;
+
+          html5QrCode.pause(true); // หยุดสแกนชั่วคราวระหว่างถามจำนวน
+
+          const qty = prompt('พบบาร์โค้ด: ' + decodedText + '\nใส่จำนวน:', '1');
+          if (!qty) {
+            box.innerText = '📍 เล็งกล้องไปที่บาร์โค้ด...';
+            html5QrCode.resume();
+            isProcessing = false;
+            return;
+          }
+
+          sendToServer(decodedText, qty).finally(() => {
+            html5QrCode.resume();
+            isProcessing = false;
+          });
+        },
+        () => {
+          // เรียกทุกเฟรมที่ยังไม่เจอบาร์โค้ด — ไม่ต้องทำอะไร (เป็นเรื่องปกติ)
+        }
+      )
+      .then(() => {
         document.getElementById('openCameraBtn').style.display = 'none';
-        document.getElementById('captureBtn').style.display = 'block';
         document.getElementById('closeCameraBtn').style.display = 'block';
-        box.innerText = '📍 เล็งกล้องไปที่บาร์โค้ด แล้วกด "ถ่ายเพื่ออ่านบาร์โค้ด"';
+        box.innerText = '📍 เล็งกล้องไปที่บาร์โค้ด ให้อยู่ในกรอบ ไม่ต้องกดถ่าย รอสักครู่ระบบจะอ่านให้อัตโนมัติ';
       })
       .catch(err => {
-        console.error('เปิดกล้องไม่สำเร็จ:', err);
-        box.innerText = '❌ เปิดกล้องไม่สำเร็จ: ' + err.message + ' (ตรวจสอบว่าอนุญาตสิทธิ์กล้องแล้ว และเว็บต้องเป็น https)';
+        box.innerText = '❌ เปิดกล้องไม่สำเร็จ: ' + err + ' (ตรวจสอบว่าอนุญาตสิทธิ์กล้องแล้ว และเว็บต้องเป็น https)';
       });
     }
 
     function closeCamera() {
-      if (currentStream) {
-        currentStream.getTracks().forEach(track => track.stop());
-        currentStream = null;
+      if (html5QrCode) {
+        html5QrCode.stop().then(() => {
+          html5QrCode.clear();
+          html5QrCode = null;
+        }).catch(() => {});
       }
-      document.getElementById('video').style.display = 'none';
-      document.getElementById('capturedPhoto').style.display = 'none';
       document.getElementById('openCameraBtn').style.display = 'block';
-      document.getElementById('captureBtn').style.display = 'none';
-      document.getElementById('retakeBtn').style.display = 'none';
       document.getElementById('closeCameraBtn').style.display = 'none';
       document.getElementById('result').innerText = 'ผลลัพธ์จะแสดงตรงนี้';
-    }
-
-    function retake() {
-      document.getElementById('capturedPhoto').style.display = 'none';
-      document.getElementById('video').style.display = 'block';
-      document.getElementById('captureBtn').style.display = 'block';
-      document.getElementById('retakeBtn').style.display = 'none';
-      document.getElementById('result').innerText = '📍 เล็งกล้องไปที่บาร์โค้ด แล้วกด "ถ่ายเพื่ออ่านบาร์โค้ด"';
-    }
-
-    function captureAndScan() {
-      const box = document.getElementById('result');
-      const video = document.getElementById('video');
-      const canvas = document.getElementById('canvas');
-
-      // ย่อขนาดภาพก่อนสแกน (ตัวใหญ่สุด 1280px) — สมดุลระหว่างความคมของบาร์โค้ดกับความเร็วในการอ่าน
-      const MAX_DIM = 1280;
-      let w = video.videoWidth;
-      let h = video.videoHeight;
-      if (w > h && w > MAX_DIM) {
-        h = Math.round(h * (MAX_DIM / w));
-        w = MAX_DIM;
-      } else if (h > MAX_DIM) {
-        w = Math.round(w * (MAX_DIM / h));
-        h = MAX_DIM;
-      }
-      canvas.width = w;
-      canvas.height = h;
-      canvas.getContext('2d').drawImage(video, 0, 0, w, h);
-
-      // แช่ภาพที่ถ่ายไว้เป็นรูปนิ่ง แทนที่จะให้วิดีโอสดวิ่งต่อ
-      const capturedPhoto = document.getElementById('capturedPhoto');
-      capturedPhoto.src = canvas.toDataURL('image/jpeg', 0.9);
-      capturedPhoto.style.display = 'block';
-      video.style.display = 'none';
-      document.getElementById('captureBtn').style.display = 'none';
-      document.getElementById('retakeBtn').style.display = 'block';
-
-      box.innerText = '🔍 กำลังอ่านบาร์โค้ด...';
-
-      // กันเหนียว: ถ้าสแกนนานเกิน 12 วินาทีให้แจ้งเตือนแทนที่จะค้างเฉยๆ
-      let timedOut = false;
-      const timeoutId = setTimeout(() => {
-        timedOut = true;
-        box.innerText = '⏱️ อ่านบาร์โค้ดนานเกินไป ลองขยับเข้าใกล้/เล็งให้ตรงแล้วถ่ายใหม่';
-      }, 12000);
-
-      canvas.toBlob(blob => {
-        const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
-        scanBarcodeFromFile(file)
-          .then(decodedText => {
-            if (timedOut) return; // ผลมาช้าเกินไป ผู้ใช้กดถ่ายใหม่ไปแล้ว
-            clearTimeout(timeoutId);
-            const qty = prompt('พบบาร์โค้ด: ' + decodedText + '\nใส่จำนวน:', '1');
-            if (!qty) {
-              retake(); // ยกเลิก กลับไปกล้องสดเพื่อถ่ายใหม่
-              return;
-            }
-            sendToServer(decodedText, qty);
-            retake(); // อ่านสำเร็จแล้ว กลับไปกล้องสดพร้อมสแกนชิ้นถัดไปทันที
-          })
-          .catch(err => {
-            if (timedOut) return;
-            clearTimeout(timeoutId);
-            // อ่านไม่ได้ - เก็บภาพที่ถ่ายไว้ให้ดู แล้วให้กด "ถ่ายใหม่" เอง
-            box.innerText = '❌ อ่านบาร์โค้ดไม่ได้จากภาพนี้ ลองเล็งให้ชัดขึ้น ใกล้ขึ้น หรือหลบแสงสะท้อน แล้วกด "ถ่ายใหม่"';
-          });
-      }, 'image/jpeg', 0.85);
     }
 
     function sendToServer(barcode, qty) {
       const box = document.getElementById('result');
       box.innerText = '📡 กำลังส่งข้อมูลไปเซิร์ฟเวอร์...';
 
-      fetch(WEB_APP_URL, {
+      return fetch(WEB_APP_URL, {
         method: 'POST',
         body: JSON.stringify({ barcode: barcode, type: mode, qty: qty })
       })
       .then(res => {
-        // ถ้า Apps Script ตอบกลับมาไม่ใช่ 200 (เช่นหน้า login ของ Google) ให้โยน error ทันที
         if (!res.ok) {
           throw new Error('เซิร์ฟเวอร์ตอบกลับสถานะ ' + res.status);
         }
-        return res.text(); // ใช้ text() ก่อนเพื่อดักกรณีที่ไม่ใช่ JSON จริง
+        return res.text();
       })
       .then(text => {
         let data;
@@ -220,7 +133,7 @@
           throw new Error('รูปแบบข้อมูลจาก Apps Script ไม่ถูกต้อง (อาจตั้งค่า deploy ผิด)');
         }
         if (data.status === 'success') {
-          box.innerText = `✅ ${data.product} — คงเหลือ ${data.newQty} ชิ้น`;
+          box.innerText = `✅ ${data.product} — คงเหลือ ${data.newQty} ชิ้น\n\n📍 เล็งกล้องไปที่บาร์โค้ดชิ้นถัดไปได้เลย`;
         } else {
           box.innerText = `❌ ${data.message || 'ไม่ทราบสาเหตุ'}`;
         }
