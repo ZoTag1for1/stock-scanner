@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ระบบสแกนสินค้าคงคลัง</title>
+<script src="https://unpkg.com/html5-qrcode"></script>
+<style>
+  body { font-family: sans-serif; max-width: 480px; margin: 20px auto; padding: 0 16px; }
+  #reader { width: 100%; }
+  button { padding: 10px 16px; margin: 4px; font-size: 16px; }
+  .in { background: #d4edda; }
+  .out { background: #f8d7da; }
+  #result { margin-top: 16px; padding: 12px; border-radius: 6px; background: #eee; }
+</style>
+</head>
+<body>
+  <h2>สแกนบาร์โค้ดสินค้า</h2>
+  <div id="reader"></div>
+
+  <p>โหมด:
+    <button class="in" onclick="setMode('in')">รับเข้า (Stock In)</button>
+    <button class="out" onclick="setMode('out')">จำหน่ายออก (Stock Out)</button>
+  </p>
+  <p>โหมดปัจจุบัน: <span id="modeLabel">รับเข้า</span></p>
+
+  <div id="result">ผลลัพธ์จะแสดงตรงนี้</div>
+
+  <script>
+    const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbyGJyq76Efd3OC_o5gL6fAKUcbWzTzb4N9zpjPubt8YpTvWwq9J5H-5Luep08PAMxtxaA/exec';
+    let mode = 'in';
+
+    function setMode(m) {
+      mode = m;
+      document.getElementById('modeLabel').innerText = m === 'in' ? 'รับเข้า' : 'จำหน่ายออก';
+    }
+
+    function onScanSuccess(decodedText) {
+      const qty = prompt('จำนวน:', '1');
+      if (!qty) return;
+
+      fetch(WEB_APP_URL, {
+        method: 'POST',
+        body: JSON.stringify({ barcode: decodedText, type: mode, qty: qty })
+      })
+      .then(res => res.json())
+      .then(data => {
+        const box = document.getElementById('result');
+        if (data.status === 'success') {
+          box.innerText = `✅ ${data.product} — คงเหลือ ${data.newQty} ชิ้น`;
+        } else {
+          box.innerText = `❌ ${data.message}`;
+        }
+      });
+    }
+
+    const scanner = new Html5QrcodeScanner('reader', { fps: 10, qrbox: 250 });
+    scanner.render(onScanSuccess);
+  </script>
+</body>
+</html>
