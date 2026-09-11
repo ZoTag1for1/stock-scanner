@@ -63,18 +63,37 @@
     }
 
     function sendToServer(barcode, qty) {
+      const box = document.getElementById('result');
+      box.innerText = '📡 กำลังส่งข้อมูลไปเซิร์ฟเวอร์...';
+
       fetch(WEB_APP_URL, {
         method: 'POST',
         body: JSON.stringify({ barcode: barcode, type: mode, qty: qty })
       })
-      .then(res => res.json())
-      .then(data => {
-        const box = document.getElementById('result');
+      .then(res => {
+        // ถ้า Apps Script ตอบกลับมาไม่ใช่ 200 (เช่นหน้า login ของ Google) ให้โยน error ทันที
+        if (!res.ok) {
+          throw new Error('เซิร์ฟเวอร์ตอบกลับสถานะ ' + res.status);
+        }
+        return res.text(); // ใช้ text() ก่อนเพื่อดักกรณีที่ไม่ใช่ JSON จริง
+      })
+      .then(text => {
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          console.error('ข้อมูลที่ได้ไม่ใช่ JSON:', text);
+          throw new Error('รูปแบบข้อมูลจาก Apps Script ไม่ถูกต้อง (อาจตั้งค่า deploy ผิด)');
+        }
         if (data.status === 'success') {
           box.innerText = `✅ ${data.product} — คงเหลือ ${data.newQty} ชิ้น`;
         } else {
-          box.innerText = `❌ ${data.message}`;
+          box.innerText = `❌ ${data.message || 'ไม่ทราบสาเหตุ'}`;
         }
+      })
+      .catch(err => {
+        console.error('sendToServer error:', err);
+        box.innerText = '❌ เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ: ' + err.message;
       });
     }
   </script>
